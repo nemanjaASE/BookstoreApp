@@ -1,0 +1,42 @@
+﻿@{
+    ViewData["Title"] = "Book Store";
+}
+
+<h2>Book Store</h2>
+
+@if (ViewBag.ErrorMessage != null)
+{
+    <div class="alert alert-danger">
+        @ViewBag.ErrorMessage
+    </div>
+}
+
+<form asp-action="Order" method="post">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Quantity</th>
+                <th>Client</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>
+                    <input type="text" name="title" />
+                </td>
+                <td>
+                    <input type="text" name="quantity" />
+                </td>
+                <td>
+                    <input type="text" name="client" />
+                </td>
+            </tr>
+            <tr>
+                <td colspan="3">
+                    <button type="submit">Submit</button>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</form>
