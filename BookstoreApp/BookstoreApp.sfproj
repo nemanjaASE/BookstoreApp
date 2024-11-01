@@ -36,9 +36,12 @@
     <Content Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\BankService\BankService.csproj" />
+    <ProjectReference Include="..\BookstoreService\BookstoreService.csproj" />
     <ProjectReference Include="..\ClientWebApp\ClientWebApp.csproj">
       <ServiceLaunchUrl>http://localhost:{ServicePort}/</ServiceLaunchUrl>
     </ProjectReference>
+    <ProjectReference Include="..\TransactionCoordinatorService\TransactionCoordinatorService.csproj" />
     <ProjectReference Include="..\ValidationService\ValidationService.csproj" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />

@@ -6,9 +6,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Interfaces;
+using Microsoft.ServiceFabric.Services.Client;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
+using Microsoft.ServiceFabric.Services.Remoting.Client;
+using Microsoft.ServiceFabric.Services.Remoting.FabricTransport;
 using Microsoft.ServiceFabric.Services.Remoting.FabricTransport.Runtime;
 using Microsoft.ServiceFabric.Services.Remoting.Runtime;
+using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Client;
 using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Runtime;
 using Microsoft.ServiceFabric.Services.Runtime;
 
@@ -16,9 +20,24 @@ namespace ValidationService
 {
 	internal sealed class ValidationService : StatelessService, IValidation
     {
+        private readonly ITransactionCoordinator _transactionCoordinatorService;
         public ValidationService(StatelessServiceContext context)
             : base(context)
-        { }
+        {
+            var serviceProxyFactory = new ServiceProxyFactory((callbackClient) =>
+            {
+                return new FabricTransportServiceRemotingClientFactory(
+                    new FabricTransportRemotingSettings
+                {
+                    ExceptionDeserializationTechnique = FabricTransportRemotingSettings.ExceptionDeserialization.Default
+                }, callbackClient);
+            });
+
+            var serviceUri = new Uri("fabric:/BookstoreApp/TransactionCoordinatorService");
+
+            _transactionCoordinatorService = serviceProxyFactory.CreateServiceProxy<ITransactionCoordinator>(serviceUri, new ServicePartitionKey(0));
+        }
+
 
 		public async Task ValidateBookAsync(string title, int quantity, string client)
 		{
@@ -38,14 +57,13 @@ namespace ValidationService
             {
                 throw new ArgumentException("Client cannot be null or empty. Please provide a valid client name.");
             }
-            // TO DO:
 
-            await Task.CompletedTask;
+            await _transactionCoordinatorService.StartTransaction(title, quantity, client);
         }
 
         protected override IEnumerable<ServiceInstanceListener> CreateServiceInstanceListeners()
         {
-            return new[]
+            return new List<ServiceInstanceListener>
             {
                 new ServiceInstanceListener(serviceContext =>
                     new FabricTransportServiceRemotingListener(
