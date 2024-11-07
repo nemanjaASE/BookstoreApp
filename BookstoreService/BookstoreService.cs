@@ -74,7 +74,7 @@ namespace BookstoreService
 
                     Book book = await BookstoreHelper.getBookById(tx, _books, bookId);
 
-					if (reservedBookEnumerator.Current.Value >= book.Quantity)
+					if (reservedBookEnumerator.Current.Value > book.Quantity)
 					{
 						return false;
 					}

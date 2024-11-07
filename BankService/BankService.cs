@@ -72,7 +72,7 @@ namespace BankService
 
 					Client client = await ClientHelper.getClientById(tx, _clients, clientId);
 
-					if (reservedClientEnumerator.Current.Value >= client.Balance)
+					if (reservedClientEnumerator.Current.Value > client.Balance)
 					{
 						return false;
 					}
