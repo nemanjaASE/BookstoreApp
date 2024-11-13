@@ -1,17 +1,12 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Fabric;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Interfaces;
+using Common.Interfaces;
+using Common.Models;
 using Microsoft.ServiceFabric.Data.Collections;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
 using Microsoft.ServiceFabric.Services.Remoting.FabricTransport.Runtime;
 using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Runtime;
 using Microsoft.ServiceFabric.Services.Runtime;
-using Models;
 
 namespace BankService
 {

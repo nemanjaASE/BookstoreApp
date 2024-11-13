@@ -1,12 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Fabric;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Interfaces;
-using Microsoft.ServiceFabric.Data.Collections;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
 using Microsoft.ServiceFabric.Services.Runtime;
 using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Runtime;
@@ -15,6 +8,7 @@ using Microsoft.ServiceFabric.Services.Remoting.Client;
 using Microsoft.ServiceFabric.Services.Client;
 using Microsoft.ServiceFabric.Services.Remoting.FabricTransport;
 using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Client;
+using Common.Interfaces;
 
 namespace TransactionCoordinatorService
 {
@@ -75,7 +69,7 @@ namespace TransactionCoordinatorService
 
             Debug.WriteLine($"State before transaction - " +
                 $"BOOK (BookID: {bookResult.Key} Quantity: {bookResult.Value.Quantity}) " +
-                $"CLIENT (ClientID: {clientResult.Key} Quantity: {clientResult.Value.Balance})");
+                $"CLIENT (ClientID: {clientResult.Key} Balance: {clientResult.Value.Balance})");
 
             try
             {

@@ -1,14 +1,10 @@
 ﻿using ClientWebApp.Models;
-using Interfaces;
-using ValidationService;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.ServiceFabric.Services.Remoting.Client;
-using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using System.Text.RegularExpressions;
-using Microsoft.ServiceFabric.Services.Communication;
 using Microsoft.ServiceFabric.Services.Remoting.FabricTransport;
 using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Client;
+using Common.Interfaces;
 
 namespace ClientWebApp.Controllers
 {
