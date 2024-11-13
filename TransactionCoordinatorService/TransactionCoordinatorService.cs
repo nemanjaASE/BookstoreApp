@@ -18,9 +18,6 @@ using Microsoft.ServiceFabric.Services.Remoting.V2.FabricTransport.Client;
 
 namespace TransactionCoordinatorService
 {
-    /// <summary>
-    /// An instance of this class is created for each service replica by the Service Fabric runtime.
-    /// </summary>
     internal sealed class TransactionCoordinatorService : StatefulService, ITransactionCoordinator
     {
         private readonly IBookstore _bookstoreService;
@@ -58,41 +55,75 @@ namespace TransactionCoordinatorService
 
         public async Task StartTransaction(string title, int quantity, string client)
         {
-            var availableBooks = await _bookstoreService.ListAvailableItems();
+			Guid transactionId = Guid.NewGuid();
 
-			var bookID = availableBooks.FirstOrDefault(b => b.Value.Title.Equals(title, StringComparison.OrdinalIgnoreCase)).Key;
+			var availableBooks = await _bookstoreService.ListAvailableItems();
 
-            double price = await _bookstoreService.GetItemPrice(bookID);
+			var bookResult = availableBooks.FirstOrDefault(b => b.Value.Title.Equals(title, StringComparison.OrdinalIgnoreCase));
+
+            string bookId = bookResult.Key;
+
+            double price = await _bookstoreService.GetItemPrice(bookId);
 
             var clients = await _bankService.ListClients();
 
-            var clientID = clients.FirstOrDefault(c => c.Value.ClientName.Equals(client)).Key;
+            var clientResult = clients.FirstOrDefault(c => c.Value.ClientName.Equals(client));
+
+            string clientId = clientResult.Key;
 
             double amount = quantity * price;
 
+            Debug.WriteLine($"State before transaction - " +
+                $"BOOK (BookID: {bookResult.Key} Quantity: {bookResult.Value.Quantity}) " +
+                $"CLIENT (ClientID: {clientResult.Key} Quantity: {clientResult.Value.Balance})");
+
             try
             {
-                await _bookstoreService.EnlistPurchase(bookID, (uint)quantity);
-                await _bankService.EnlistMoneyTransfer(clientID, amount);
+				await _bookstoreService.EnlistPurchase(transactionId, bookId, (uint)quantity);
+                await _bankService.EnlistMoneyTransfer(transactionId, clientId, amount);
 
-                bool isPreparedBookstore = await _bookstoreService.Prepare();
-                bool isPreparedBank = await _bankService.Prepare();
+                Debug.WriteLine("Enlist Ended.");
 
-                if(isPreparedBookstore && isPreparedBank)
+				bool isPreparedBookstore = await _bookstoreService.Prepare(transactionId);
+                bool isPreparedBank = await _bankService.Prepare(transactionId);
+
+				Debug.WriteLine("Prepare Ended.");
+
+				if (isPreparedBookstore && isPreparedBank)
                 {
-                    await _bookstoreService.Commit();
-                    await _bankService.Commit();
-                }
+					await _bookstoreService.Commit(transactionId);
+                    await _bankService.Commit(transactionId);
+
+					Debug.WriteLine("Commit Ended.");
+
+					availableBooks = await _bookstoreService.ListAvailableItems();
+
+                    foreach (var item in availableBooks)
+                    {
+                        Debug.WriteLine($"{item.Key} {item.Value.Title} {item.Value.Quantity}");
+                    }
+
+					clients = await _bankService.ListClients();
+
+					foreach (var item in clients)
+					{
+						Debug.WriteLine($"{item.Key} {item.Value.ClientName} {item.Value.Balance}");
+					}
+				}
                 else
                 {
-                    await _bookstoreService.Rollback();
-                    await _bankService.Rollback();
-                }
+					await _bookstoreService.Rollback(transactionId);
+                    await _bankService.Rollback(transactionId);
+
+					Debug.WriteLine("Rollback Ended.");
+				}
             }
             catch (Exception ex)
             {
-				await _bookstoreService.Rollback();
-                await _bankService.Rollback();
+				await _bookstoreService.Rollback(transactionId);
+                await _bankService.Rollback(transactionId);
+
+				Debug.WriteLine("Rollback Ended.");
 				throw new Exception(ex.Message);
             }
         }
@@ -111,34 +142,6 @@ namespace TransactionCoordinatorService
                             })
                     )
             };
-        }
-        protected override async Task RunAsync(CancellationToken cancellationToken)
-        {
-            // TODO: Replace the following sample code with your own logic 
-            //       or remove this RunAsync override if it's not needed in your service.
-
-            var myDictionary = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, long>>("myDictionary");
-
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                using (var tx = this.StateManager.CreateTransaction())
-                {
-                    var result = await myDictionary.TryGetValueAsync(tx, "Counter");
-
-                    ServiceEventSource.Current.ServiceMessage(this.Context, "Current Counter Value: {0}",
-                        result.HasValue ? result.Value.ToString() : "Value does not exist.");
-
-                    await myDictionary.AddOrUpdateAsync(tx, "Counter", 0, (key, value) => ++value);
-
-                    // If an exception is thrown before calling CommitAsync, the transaction aborts, all changes are 
-                    // discarded, and nothing is saved to the secondary replicas.
-                    await tx.CommitAsync();
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            }
         }
     }
 }

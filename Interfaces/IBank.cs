@@ -11,6 +11,6 @@ namespace Interfaces
     public interface IBank : IService, ITransaction
     {
         Task<Dictionary<string, Client>> ListClients();
-        Task EnlistMoneyTransfer(string userID, double amount);
+        Task EnlistMoneyTransfer(Guid transactionId, string userID, double amount);
     }
 }
