@@ -16,99 +16,92 @@ using Models;
 namespace BankService
 {
 
-    internal sealed class BankService : StatefulService, IBank
+    internal sealed class BankService(StatefulServiceContext context) : StatefulService(context), IBank
     {
 		private const string CLIENTS_DICTIONARY = "accounts";
 		private const string RESERVED_FUNDS_DICTIONARY = "reserved_funds";
 
-		private IReliableDictionary<string, Client> _clients;
-		private IReliableDictionary<string, double> _reservedFunds;
-		public BankService(StatefulServiceContext context)
-            : base(context)
-        { }
+		private IReliableDictionary<string, Client>? _clients;
+		private IReliableDictionary<Guid, ReservedFund>? _reservedFunds;
 
-		public async Task Commit()
+		public async Task Commit(Guid transactionId)
 		{
-			var stateManager = this.StateManager;
+			_clients = await StateManager.GetOrAddAsync<IReliableDictionary<string, Client>>(CLIENTS_DICTIONARY);
 
-			_clients = await stateManager.GetOrAddAsync<IReliableDictionary<string, Client>>(CLIENTS_DICTIONARY);
-			_reservedFunds = await stateManager.GetOrAddAsync<IReliableDictionary<string, double>>(RESERVED_FUNDS_DICTIONARY);
+			_reservedFunds = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedFund>>(RESERVED_FUNDS_DICTIONARY);
 
-			using (var tx = stateManager.CreateTransaction())
+			using var tx = StateManager.CreateTransaction();
+
+			var reservedFundResult = await _reservedFunds.TryGetValueAsync(tx, transactionId);
+
+			if (reservedFundResult.HasValue)
 			{
-				var reservedClientEnumerator = (await _reservedFunds.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
+				ReservedFund reservedFund = reservedFundResult.Value;
 
-				while (await reservedClientEnumerator.MoveNextAsync(CancellationToken.None))
+				var clientResult = await _clients.TryGetValueAsync(tx, reservedFund.ClientId);
+
+				if (clientResult.HasValue)
 				{
-					string clientId = reservedClientEnumerator.Current.Key;
-					double reservedAmount = reservedClientEnumerator.Current.Value;
+					Client client = clientResult.Value;
 
-					Client client = await ClientHelper.getClientById(tx, _clients, clientId);
+					client.Balance -= reservedFund.Amount;
 
-					client.Balance -= reservedAmount;
+					await _clients.SetAsync(tx, reservedFund.ClientId, client);
 
-					await _clients.SetAsync(tx, reservedClientEnumerator.Current.Key, client);
+					await _reservedFunds.TryRemoveAsync(tx, transactionId);
+
+					await tx.CommitAsync();
 				}
-
-				await _reservedFunds.ClearAsync();
-
-				await tx.CommitAsync();
 			}
 		}
-		public async Task<bool> Prepare()
+		public async Task<bool> Prepare(Guid transactionId)
 		{
-			var stateManager = this.StateManager;
+			bool isPrepared = false;
 
-			_clients = await stateManager.GetOrAddAsync<IReliableDictionary<string, Client>>(CLIENTS_DICTIONARY);
-			_reservedFunds = await stateManager.GetOrAddAsync<IReliableDictionary<string, double>>(RESERVED_FUNDS_DICTIONARY);
+			_clients = await StateManager.GetOrAddAsync<IReliableDictionary<string, Client>>(CLIENTS_DICTIONARY);
 
-			using (var tx = stateManager.CreateTransaction())
+			_reservedFunds = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedFund>>(RESERVED_FUNDS_DICTIONARY);
+
+			using var tx = StateManager.CreateTransaction();
+
+			var reservedFundResult = await _reservedFunds.TryGetValueAsync(tx, transactionId);
+
+			if (reservedFundResult.HasValue)
 			{
-				var reservedClientEnumerator = (await _reservedFunds.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
+				ReservedFund reservedFund = reservedFundResult.Value;
 
-				while (await reservedClientEnumerator.MoveNextAsync(CancellationToken.None))
+				var clientResult = await _clients.TryGetValueAsync(tx, reservedFund.ClientId);
+
+				if (clientResult.HasValue)
 				{
-					string clientId = reservedClientEnumerator.Current.Key;
-
-					Client client = await ClientHelper.getClientById(tx, _clients, clientId);
-
-					if (reservedClientEnumerator.Current.Value > client.Balance)
-					{
-						return false;
-					}
+					Client client = clientResult.Value;
+					isPrepared = reservedFund.Amount <= client.Balance;
 				}
-
-				return true;
 			}
+
+			return isPrepared;
 		}
 
-		public async Task Rollback()
+		public async Task Rollback(Guid transactionId)
 		{
-			var stateManager = this.StateManager;
+			_reservedFunds = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedFund>>(RESERVED_FUNDS_DICTIONARY);
 
-			_reservedFunds = await stateManager.GetOrAddAsync<IReliableDictionary<string, double>>(RESERVED_FUNDS_DICTIONARY);
+			using var tx = StateManager.CreateTransaction();
 
-			using (var tx = stateManager.CreateTransaction())
-			{
-				await _reservedFunds.ClearAsync();
-				await tx.CommitAsync();
-			}
+			await _reservedFunds.TryRemoveAsync(tx, transactionId);
+
+			await tx.CommitAsync();
 		}
 
-		public async Task EnlistMoneyTransfer(string userID, double amount)
+		public async Task EnlistMoneyTransfer(Guid transactionId, string userID, double amount)
 		{
-			var stateManeger = this.StateManager;
-			_reservedFunds = await stateManeger.GetOrAddAsync<IReliableDictionary<string, double>>(RESERVED_FUNDS_DICTIONARY);
+			_reservedFunds = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedFund>>(RESERVED_FUNDS_DICTIONARY);
 
-			using (var tx = stateManeger.CreateTransaction())
-			{
-				var reservedFunds = await _reservedFunds.TryGetValueAsync(tx, userID);
-				double newReservedFunds = reservedFunds.HasValue ? reservedFunds.Value + amount : amount;
+			using var tx = StateManager.CreateTransaction();
 
-				await _reservedFunds.SetAsync(tx, userID, newReservedFunds);
+			await _reservedFunds.SetAsync(tx, transactionId, new ReservedFund() { ClientId = userID, Amount = amount});
 
-				await tx.CommitAsync();
-			}
+			await tx.CommitAsync();
 		}
 
 		public async Task<Dictionary<string, Client>> ListClients()
@@ -149,23 +142,24 @@ namespace BankService
 
         protected override async Task RunAsync(CancellationToken cancellationToken)
         {
-			_clients = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Client>>(CLIENTS_DICTIONARY);
-			_reservedFunds = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, double>>(RESERVED_FUNDS_DICTIONARY);
+			_clients = await StateManager.GetOrAddAsync<IReliableDictionary<string, Client>>(CLIENTS_DICTIONARY);
 
-			using (var tx = this.StateManager.CreateTransaction())
+			_reservedFunds = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedFund>>(RESERVED_FUNDS_DICTIONARY);
+
+			using var tx = StateManager.CreateTransaction();
+
+			var enumerator = (await _clients.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
+
+			if (!await enumerator.MoveNextAsync(cancellationToken))
 			{
-				var enumerator = (await _clients.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
-				if (!await enumerator.MoveNextAsync(cancellationToken))
-				{
-					Debug.WriteLine("---Uspesno inicijalizovani podaci!---");
-					await _clients.AddAsync(tx, "client1", new Client { ClientName = "Pera", Balance = 20000});
-					await _clients.AddAsync(tx, "client2", new Client { ClientName = "Ana", Balance = 1000});
-				}
-
-				await _reservedFunds.ClearAsync();
-
-				await tx.CommitAsync();
+				Debug.WriteLine("---Uspesno inicijalizovani podaci!---");
+				await _clients.AddAsync(tx, "client1", new Client { ClientName = "Pera", Balance = 20000 });
+				await _clients.AddAsync(tx, "client2", new Client { ClientName = "Ana", Balance = 1000 });
 			}
+
+			await _reservedFunds.ClearAsync();
+
+			await tx.CommitAsync();
 		}
     }
 }

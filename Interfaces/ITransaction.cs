@@ -9,8 +9,8 @@ namespace Interfaces
 {
     public interface ITransaction : IService
     {
-        Task<bool> Prepare();
-        Task Commit();
-        Task Rollback();
+        Task<bool> Prepare(Guid transactionId);
+        Task Commit(Guid transactionId);
+        Task Rollback(Guid transactionId);
     }
 }

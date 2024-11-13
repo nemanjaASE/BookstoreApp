@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Fabric;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Threading;
 using System.Threading.Tasks;
 using Interfaces;
@@ -15,103 +17,96 @@ using Models;
 
 namespace BookstoreService
 {
-    internal sealed class BookstoreService : StatefulService, IBookstore
+    internal sealed class BookstoreService(StatefulServiceContext context) : StatefulService(context), IBookstore
     {
         private const string BOOK_DICTIONARY = "books";
         private const string RESERVED_BOOK_DICTIONARY = "reserved_books";
 
-        private IReliableDictionary<string, Book> _books;
-        private IReliableDictionary<string, uint> _reservedBooks;
+        private IReliableDictionary<string, Book>? _books;
+        private IReliableDictionary<Guid, ReservedBook>? _reservedBooks;
 
-        public BookstoreService(StatefulServiceContext context)
-            : base(context)
+        public async Task Commit(Guid transactionId)
         {
-        }
+			_books = await StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>(BOOK_DICTIONARY);
 
-        public async Task Commit()
-        {
-			var stateManager = this.StateManager;
+			_reservedBooks = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedBook>>(RESERVED_BOOK_DICTIONARY);
 
-			_books = await stateManager.GetOrAddAsync<IReliableDictionary<string, Book>>(BOOK_DICTIONARY);
-			_reservedBooks = await stateManager.GetOrAddAsync<IReliableDictionary<string, uint>>(RESERVED_BOOK_DICTIONARY);
-     
-			using (var tx = stateManager.CreateTransaction())
+			using var tx = StateManager.CreateTransaction();
+
+			var reservedBookResult = await _reservedBooks.TryGetValueAsync(tx, transactionId);
+
+			if (reservedBookResult.HasValue)
 			{
-				var reservedBookEnumerator = (await _reservedBooks.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
+				ReservedBook reservedBook = reservedBookResult.Value;
 
-				while (await reservedBookEnumerator.MoveNextAsync(CancellationToken.None))
+				var bookResult = await _books.TryGetValueAsync(tx, reservedBook.BookId);
+
+				if (bookResult.HasValue)
 				{
-                    string bookId = reservedBookEnumerator.Current.Key;
-                    uint reservedQuantity = reservedBookEnumerator.Current.Value;
+					Book book = bookResult.Value;
 
-                    Book book = await BookstoreHelper.getBookById(tx, _books, bookId);
+					book.Quantity -= reservedBook.Quantity;
 
-                    book.Quantity -= reservedQuantity;
+					await _books.SetAsync(tx, reservedBook.BookId, book);
 
-                    await _books.SetAsync(tx, reservedBookEnumerator.Current.Key, book);
+					await _reservedBooks.TryRemoveAsync(tx, transactionId);
+
+					await tx.CommitAsync();
 				}
-
-				await _reservedBooks.ClearAsync();
-
-				await tx.CommitAsync();
 			}
 		}
 
-		public async Task<bool> Prepare()
+		public async Task<bool> Prepare(Guid transactionId)
 		{
-			var stateManager = this.StateManager;
+            bool isPrepared = false;
 
-			_books = await stateManager.GetOrAddAsync<IReliableDictionary<string, Book>>(BOOK_DICTIONARY);
-			_reservedBooks = await stateManager.GetOrAddAsync<IReliableDictionary<string, uint>>(RESERVED_BOOK_DICTIONARY);
+			_books = await StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>(BOOK_DICTIONARY);
 
-			using (var tx = stateManager.CreateTransaction())
+			_reservedBooks = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedBook>>(RESERVED_BOOK_DICTIONARY);
+
+			using (var tx = StateManager.CreateTransaction())
 			{
-				var reservedBookEnumerator = (await _reservedBooks.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
 
-				while (await reservedBookEnumerator.MoveNextAsync(CancellationToken.None))
-				{
-                    string bookId = reservedBookEnumerator.Current.Key;
+				var reservedBookResult = await _reservedBooks.TryGetValueAsync(tx, transactionId);
 
-                    Book book = await BookstoreHelper.getBookById(tx, _books, bookId);
+                if (reservedBookResult.HasValue)
+                {
+                    ReservedBook reservedBook = reservedBookResult.Value;
 
-					if (reservedBookEnumerator.Current.Value > book.Quantity)
-					{
-						return false;
+					var bookResult = await _books.TryGetValueAsync(tx, reservedBook.BookId);
+
+                    if (bookResult.HasValue)
+                    {
+                        Book book = bookResult.Value;
+						isPrepared = reservedBook.Quantity <= book.Quantity;
 					}
 				}
-
-				return true;
 			}
+
+            return isPrepared;
 		}
 
-        public async Task Rollback()
+        public async Task Rollback(Guid transactionId)
         {
-            var stateManager = this.StateManager;
+            _reservedBooks = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedBook>>(RESERVED_BOOK_DICTIONARY);
 
-            _reservedBooks = await stateManager.GetOrAddAsync<IReliableDictionary<string, uint>>(RESERVED_BOOK_DICTIONARY);
+			using var tx = StateManager.CreateTransaction();
 
-            using (var tx = stateManager.CreateTransaction())
-            {
-                await _reservedBooks.ClearAsync();
-                await tx.CommitAsync();
-            }
-        }
+			await _reservedBooks.TryRemoveAsync(tx, transactionId);
 
-		public async Task EnlistPurchase(string bookID, uint count)
+			await tx.CommitAsync();
+		}
+
+		public async Task EnlistPurchase(Guid transactionId, string bookID, uint count)
         {
-            var stateManeger = this.StateManager;
-            _reservedBooks = await stateManeger.GetOrAddAsync<IReliableDictionary<string, uint>>(RESERVED_BOOK_DICTIONARY);
+            _reservedBooks = await StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedBook>>(RESERVED_BOOK_DICTIONARY);
 
-            using (var tx = stateManeger.CreateTransaction())
-            {
-				var reservedQuantity = await _reservedBooks.TryGetValueAsync(tx, bookID);
-				uint newReservedQuantity = reservedQuantity.HasValue ? reservedQuantity.Value + count : count;
+			using var tx = StateManager.CreateTransaction();
 
-                await _reservedBooks.SetAsync(tx, bookID, newReservedQuantity);
+			await _reservedBooks.SetAsync(tx, transactionId, new ReservedBook() { Quantity = count, BookId = bookID });
 
-				await tx.CommitAsync();
-            }
-        }
+			await tx.CommitAsync();
+		}
 
         public async Task<double> GetItemPrice(string bookId)
         {
@@ -120,7 +115,7 @@ namespace BookstoreService
             _books = await stateManager.GetOrAddAsync<IReliableDictionary<string, Book>>(BOOK_DICTIONARY);
             double bookPrice = 0;
 
-            using (var tx = stateManager.CreateTransaction())
+			using (var tx = stateManager.CreateTransaction())
             {
                 Book book = await BookstoreHelper.getBookById(tx, _books, bookId);
 
@@ -170,23 +165,23 @@ namespace BookstoreService
         protected override async Task RunAsync(CancellationToken cancellationToken)
         {
             _books = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, Book>>(BOOK_DICTIONARY);
-			_reservedBooks = await this.StateManager.GetOrAddAsync<IReliableDictionary<string, uint>>(RESERVED_BOOK_DICTIONARY);
+			_reservedBooks = await this.StateManager.GetOrAddAsync<IReliableDictionary<Guid, ReservedBook>>(RESERVED_BOOK_DICTIONARY);
 
-			using (var tx = this.StateManager.CreateTransaction())
-            {
-                var enumerator = (await _books.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
-                if (!await enumerator.MoveNextAsync(cancellationToken))
-                {
-                    Debug.WriteLine("---Uspesno inicijalizovani podaci!---");
-                    await _books.AddAsync(tx, "book1", new Book { Title = "Book 1", Quantity = 5, Price = 100 });
-                    await _books.AddAsync(tx, "book2", new Book { Title = "Book 2", Quantity = 1, Price = 50 });
-                    await _books.AddAsync(tx, "book3", new Book { Title = "Book 3", Quantity = 0, Price = 200 });
-                }
+			using var tx = this.StateManager.CreateTransaction();
 
-                await _reservedBooks.ClearAsync();
+			var enumerator = (await _books.CreateEnumerableAsync(tx)).GetAsyncEnumerator();
 
-				await tx.CommitAsync();
+			if (!await enumerator.MoveNextAsync(cancellationToken))
+			{
+				Debug.WriteLine("---Uspesno inicijalizovani podaci!---");
+				await _books.AddAsync(tx, "book1", new Book { Title = "Book 1", Quantity = 5, Price = 100 });
+				await _books.AddAsync(tx, "book2", new Book { Title = "Book 2", Quantity = 1, Price = 50 });
+				await _books.AddAsync(tx, "book3", new Book { Title = "Book 3", Quantity = 0, Price = 200 });
 			}
-        }
+
+			await _reservedBooks.ClearAsync();
+
+			await tx.CommitAsync();
+		}
     }
-    }
+}
